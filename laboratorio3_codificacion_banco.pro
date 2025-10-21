@@ -8,7 +8,9 @@ SUBDIRS += encode \
            bank
 
 SOURCES += src/encodec.cpp \
-           src/utilitis.cpp
+           src/utilitis.cpp \
+           src/decode.cpp
 
 HEADERS += src/encodec.h \
-           src/utilitis.h
+           src/utilitis.h \
+           src/decode.h
