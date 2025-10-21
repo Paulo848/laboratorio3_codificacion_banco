@@ -8,5 +8,6 @@ void leerArchivo(char*& out, const char* nombreArchivo, int &tamano);
 int elevar_a_n(int a,int n);
 int chartoint(const char* in);
 void escribirArchivo(const unsigned char* in, const char* nombreArachivo, int len_in);
+void rotar_derecha(int* in, int bits, int* out, int size);
 
 #endif //UTILITIS_H

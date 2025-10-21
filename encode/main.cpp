@@ -52,9 +52,22 @@ int main(int argc, char *argv[])
 
     unsigned char* datos_puros = new unsigned char [lenDatos];
 
-    //for(std::size_t i = 0; i < lenDatos; i++) datos_puros[i] = datos[i];
+    for(int i = 0; i < lenDatos; i++) datos_puros[i] = datos[i];
 
-    unsigned char* decodificado = metodo_1(semilla,datos_puros,lenDatos);
+    unsigned char* decodificado = nullptr;
+
+    switch (metodo) {
+    case 1:
+        decodificado = metodo_1(semilla,datos_puros,lenDatos);
+        break;
+    case 2:
+        decodificado = metodo_2(semilla,datos_puros,lenDatos);
+        break;
+    default:
+        break;
+    }
+
+
 
     //for(std::size_t i = 0; i < lenDatos; i++) std::cout << static_cast<char>(decodificado[i]);
 
