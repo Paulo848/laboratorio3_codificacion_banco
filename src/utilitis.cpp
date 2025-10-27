@@ -121,9 +121,6 @@ void escribirArchivo(const unsigned char* in, const char* nombreArachivo, int le
 
 }
 
-//0 1001
-//1001 0
-
 void rotar_derecha(int* in, int bits, int* out, int size) {
     int i = 0;
     out[i] = in[size-1];

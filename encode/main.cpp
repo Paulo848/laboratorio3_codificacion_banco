@@ -41,14 +41,14 @@ int main(int argc, char *argv[])
     char* metodo_in = argv[4];
     int metodo = chartoint(metodo_in);
 
-    //std::cout << "name in : |" << name_in << "| name out : |" << name_out << "| semilla: |" << semilla << "| metodo :|" << metodo << "|" << std::endl;
+    std::cout << "name in : |" << name_in << "| name out : |" << name_out << "| semilla: |" << semilla << "| metodo :|" << metodo << "|" << std::endl;
 
     char* datos = nullptr;
     int lenDatos = 0;
 
     leerArchivo(datos,name_in,lenDatos);
 
-    //std::cout << "Leídos " << lenDatos << " bytes: " << (datos ? datos : "") << "\n";
+    std::cout << "Leídos " << lenDatos << " bytes: " << (datos ? datos : "") << "\n";
 
     unsigned char* datos_puros = new unsigned char [lenDatos];
 
@@ -69,7 +69,7 @@ int main(int argc, char *argv[])
 
 
 
-    //for(std::size_t i = 0; i < lenDatos; i++) std::cout << static_cast<char>(decodificado[i]);
+    for(std::size_t i = 0; i < lenDatos; i++) std::cout << static_cast<char>(decodificado[i]);
 
     escribirArchivo(decodificado,name_out,lenDatos);
 

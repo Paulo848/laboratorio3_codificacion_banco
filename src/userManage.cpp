@@ -1,0 +1,770 @@
+#include <iostream>   // cin, cout, cerr
+#include <climits>    // LONG_MAX
+#include "fileManage.h"   // CED_BUF, PASS_BUF, appendLineaCodificada, etc.
+#include "userManage.h"
+
+// Se asume que existen los tamaños:
+
+// =====================
+// Utilidades internas
+// =====================
+
+static inline bool is_space(char c){ return c==' ' || c=='\t' || c=='\r' || c=='\n' || c=='\v' || c=='\f'; }
+static inline bool is_digit(char c){ return c>='0' && c<='9'; }
+static inline bool is_upper(char c){ return c>='A' && c<='Z'; }
+static inline bool is_lower(char c){ return c>='a' && c<='z'; }
+static inline bool is_alpha(char c){ return is_upper(c) || is_lower(c); }
+static inline bool is_printable(char c){ return c >= 32 && c <= 126; }
+static int fm_strlen(const char* s) {
+    if (!s) return 0;
+    int n = 0; while (s[n] != '\0') ++n; return n;
+}
+
+static int fm_contains_forbidden(const char* s) {
+    if (!s) return 0;
+    for (int i = 0; s[i] != '\0'; ++i) {
+        char c = s[i];
+        if (c == ',' || c == '\n' || c == '\r') return 1;
+    }
+    return 0;
+}
+
+// Escribe v en decimal en dst (capacidad cap). Devuelve chars escritos o -1.
+static int fm_write_uint(unsigned long v, char* dst, int cap) {
+    if (cap <= 0) return -1;
+    if (v == 0) {
+        if (cap < 1) return -1;
+        dst[0] = '0';
+        return 1;
+    }
+    char tmp[32]; int t = 0;
+    while (v > 0 && t < 32) { tmp[t++] = (char)('0' + (v % 10)); v /= 10; }
+    if (t > cap) return -1;
+    for (int i = 0; i < t; ++i) dst[i] = tmp[t - 1 - i];
+    return t;
+}
+
+// outCap incluye espacio para '\0'. Mantener siempre 1 libre para el '\0' final.
+static int fm_append_str(char* out, int outCap, int* ppos, const char* s) {
+    int pos = *ppos;
+    int len = fm_strlen(s);
+    if (pos + len >= outCap) return 0;
+    for (int i = 0; i < len; ++i) out[pos++] = s[i];
+    *ppos = pos;
+    return 1;
+}
+
+static int fm_append_char(char* out, int outCap, int* ppos, char c) {
+    int pos = *ppos;
+    if (pos + 1 >= outCap) return 0;
+    out[pos++] = c;
+    *ppos = pos;
+    return 1;
+}
+
+static int fm_append_uint(char* out, int outCap, int* ppos, unsigned long v) {
+    char buf[32];
+    int w = fm_write_uint(v, buf, 32);
+    if (w < 0) return 0;
+    int pos = *ppos;
+    if (pos + w >= outCap) return 0;
+    for (int i = 0; i < w; ++i) out[pos++] = buf[i];
+    *ppos = pos;
+    return 1;
+}
+
+// Lee una línea en 'buf' garantizando terminación '\0' y absorbiendo excedentes si hay overflow.
+template <size_t N>
+bool read_line_into(char (&buf)[N]) {
+    if (N == 0) return false;
+    buf[0] = '\0';
+
+    // get() + manejo manual para tener control fino del overflow y del '\n'
+    size_t i = 0;
+    for (;;) {
+        int ch = std::cin.get();
+        if (ch == EOF) {
+            if (i == 0) return false;    // Canceló antes de escribir nada
+            break;                        // EOF tras datos: aceptamos lo que haya
+        }
+        if (ch == '\n') break;
+
+        if (i + 1 < N) {                  // dejamos 1 byte para '\0'
+            buf[i++] = static_cast<char>(ch);
+        } else {
+            // Overflow: seguimos consumiendo hasta fin de línea para limpiar el buffer de entrada
+            while (true) {
+                int c2 = std::cin.get();
+                if (c2 == '\n' || c2 == EOF) break;
+            }
+            // Señalamos error por desbordamiento
+            throw "Entrada demasiado larga para el buffer.";
+        }
+    }
+    buf[i] = '\0';
+    return true;
+}
+
+// elimina espacios sobre un char.
+static inline void strip(char* s) {
+    if (!s) return;
+    // left trim
+    size_t start = 0;
+    while (s[start] && is_space(s[start])) ++start;
+
+    // right trim
+    size_t end = start;
+    while (s[end]) ++end;
+    while (end > start && is_space(s[end-1])) --end;
+
+    // mover al inicio
+    size_t j = 0;
+    for (size_t i = start; i < end; ++i) s[j++] = s[i];
+    s[j] = '\0';
+}
+
+// Copia segura (tipo strcpy limitado) garantizando '\0' y error si no cabe
+// Reemplaza tu copy_/copy_checked por esta versión:
+static inline void copy_(char* dst, const char* src, size_t N) {
+    if (!dst || !src || N == 0) throw "Buffer inválido.";
+    size_t i = 0;
+    for (; src[i] != '\0'; ++i) {
+        if (i + 1 >= N) throw "Dato no cabe en el buffer destino.";
+        dst[i] = src[i];
+    }
+    dst[i] = '\0';
+}
+
+// ==================
+//Lectores de consola
+// ==================
+
+bool leer_cedula(char out[CED_BUF]) {
+    try {
+        for (;;) {
+            std::cout << "Ingrese cedula (solo dígitos): ";
+            std::cout.flush();
+
+            char tmp[CED_BUF]; // limite potente
+            if (!read_line_into(tmp)) return false; // cancelado
+            strip(tmp);
+
+            // Validaciones
+            if (tmp[0] == '\0') { std::cerr << "Error: vacío.\n"; continue; }
+
+            // Longitud minima
+            int len = 0;
+            while (tmp[len] != '\0') ++len;
+            if (len < 5) { std::cerr << "Error: demasiado corta.\n"; continue; }
+
+            // Solo digitos
+            for (int i = 0; tmp[i] != '\0'; ++i) {
+                if (!is_digit(tmp[i])) { std::cerr << "Error: solo dígitos.\n"; goto next_attempt_ced; }
+            }
+
+            // si todo bien, copiamos
+            copy_(out, tmp, CED_BUF);
+            return true;
+
+        next_attempt_ced:
+            continue;
+        }
+    } catch (const char* msg) {
+        std::cerr << "Excepción: " << msg << "\n";
+        return false;
+    } catch (...) {
+        std::cerr << "Excepción desconocida leyendo cédula.\n";
+        return false;
+    }
+}
+
+bool leer_pass(char out[PASS_BUF]) {
+    try {
+        for (;;) {
+            std::cout << "Ingrese contraseña (>=6, alfanumerica, puede incluir simbolos imprimibles): ";
+            std::cout.flush();
+
+            char tmp[PASS_BUF]; // ponemos el límite máximo permitido
+            if (!read_line_into(tmp)) return false; // cancelado
+            strip(tmp);
+
+            // Validación básica de fuerza sin librerías:
+            // - longitud mínima 6
+            // - al menos una letra y un dígito
+            // - todos caracteres imprimibles (sin espacios en blanco de control)
+            int len = 0;
+            bool has_digit = false, has_alpha = false, all_printable = true;
+            for (; tmp[len] != '\0'; ++len) {
+                char c = tmp[len];
+                if (is_digit(c)) has_digit = true;
+                if (is_alpha(c)) has_alpha = true;
+                if (!is_printable(c) || is_space(c)) all_printable = false;
+            }
+            if (len < 6)            { std::cerr << "Error: mínima longitud 6.\n"; continue; }
+            if (!all_printable)     { std::cerr << "Error: caracteres no imprimibles o espacios.\n"; continue; }
+
+            copy_(out, tmp, PASS_BUF);
+            return true;
+        }
+    } catch (const char* msg) {
+        std::cerr << "Excepción: " << msg << "\n";
+        return false;
+    } catch (...) {
+        std::cerr << "Excepción desconocida leyendo contraseña.\n";
+        return false;
+    }
+}
+
+bool leer_long_pos(const char* prompt, long& out) {
+    try {
+        for (;;) {
+            if (prompt && *prompt) { std::cout << prompt; }
+            else                   { std::cout << "Ingrese entero positivo: "; }
+            std::cout.flush();
+
+            char buf[64];
+            if (!read_line_into(buf)) return false; // cancelado
+            strip(buf);
+
+            if (buf[0] == '\0') { std::cerr << "Error: vacío.\n"; continue; }
+
+            size_t i = 0;
+            if (!is_digit(buf[i])) { std::cerr << "Error: debe iniciar con dígito.\n"; continue; }
+
+            long outTmp = 0;
+            for (; buf[i] != '\0'; ++i) {
+                if (!is_digit(buf[i])) { std::cerr << "Error: solo dígitos.\n"; goto next_attempt_long; }
+                int d = buf[i] - '0';
+
+                // Verificar que el numero quepa en el long
+                if (outTmp > (LONG_MAX - d) / 10) {
+                    std::cerr << "Error: overflow del tipo long.\n";
+                    goto next_attempt_long;
+                }
+                outTmp = outTmp * 10 + d;
+            }
+
+            if (outTmp <= 0) { std::cerr << "Error: debe ser > 0.\n"; continue; }
+
+            out = outTmp;
+            return true;
+
+        next_attempt_long:
+            continue;
+        }
+    } catch (const char* msg) {
+        std::cerr << "Excepción: " << msg << "\n";
+        return false;
+    } catch (...) {
+        std::cerr << "Excepción desconocida leyendo entero.\n";
+        return false;
+    }
+}
+
+
+// ==================
+// BÚSQUEDAS / ÍNDICES
+// ==================
+
+int idxAdmin(const char* cedula, const char* clave,
+             char ced[][CED_BUF], char pass[][PASS_BUF], int nAdmins)
+{
+    if (!cedula || !clave || !ced || !pass || nAdmins <= 0) return -1;
+
+    for (int i = 0; i < nAdmins; ++i) {
+        // comparar cedulas
+        int a = 0;
+        while (ced[i][a] != '\0' && cedula[a] != '\0' && ced[i][a] == cedula[a]) ++a;
+        bool cedMatch = (ced[i][a] == '\0' && cedula[a] == '\0');
+        if (!cedMatch) continue;
+
+        // comparar claves
+        int b = 0;
+        while (pass[i][b] != '\0' && clave[b] != '\0' && pass[i][b] == clave[b]) ++b;
+        bool passMatch = (pass[i][b] == '\0' && clave[b] == '\0');
+        if (passMatch) return i;
+    }
+    return -1;
+}
+
+int idxUserByCed(const char* cedula,
+                 char ced[][CED_BUF], int nUsers)
+{
+    if (!cedula || !ced || nUsers <= 0) return -1;
+
+    for (int i = 0; i < nUsers; ++i) {
+        int a = 0;
+        // comparar carácter a carácter hasta que alguno termine o difieran
+        while (ced[i][a] != '\0' && cedula[a] != '\0' && ced[i][a] == cedula[a]) ++a;
+
+        // match válido si ambos terminaron al mismo tiempo
+        if (ced[i][a] == '\0' && cedula[a] == '\0') return i;
+    }
+    return -1;
+}
+
+int idxUser(const char* cedula, const char* clave,
+            char ced[][CED_BUF], char pass[][PASS_BUF], int nUsers)
+{
+    if (!cedula || !ced || nUsers <= 0) return -1;
+
+    for (int i = 0; i < nUsers; ++i) {
+        // comparar cedulas
+        int a = 0;
+        while (ced[i][a] != '\0' && cedula[a] != '\0' && ced[i][a] == cedula[a]) ++a;
+        bool cedMatch = (ced[i][a] == '\0' && cedula[a] == '\0');
+        if (!cedMatch) continue;
+
+        // comparar claves
+        int b = 0;
+        while (pass[i][b] != '\0' && clave[b] != '\0' && pass[i][b] == clave[b]) ++b;
+        bool passMatch = (pass[i][b] == '\0' && clave[b] == '\0');
+        if (passMatch) return i;
+    }
+    return -1;
+}
+
+//int  idxUserByCed(const char* cedula, char ced[][CED_BUF], int nUsers);
+
+// ====== Menú Admin (2 opciones: crear usuario / salir) ======
+bool menu_admin(const char* cedulaAdmin,
+                char userCed[][CED_BUF], char userPass[][PASS_BUF], long* userSaldo,
+                int* nUsers, int maxUsers,
+                const char* usuariosFile,
+                int metodo, int semilla)
+{
+    if (!cedulaAdmin || !userCed || !userPass || !userSaldo || !nUsers ||
+        !usuariosFile || maxUsers <= 0 || semilla <= 0 || (metodo != 1 && metodo != 2)) {
+        std::cout << "[ERR] Parámetros inválidos en menu_admin.\n";
+        return false;
+    }
+
+    for (;;) {
+        std::cout << "\n=== MENU ADMIN ===\n";
+        std::cout << "1) Crear usuario\n";
+        std::cout << "2) Salir\n";
+        std::cout << "Opción: ";
+
+        int op = 0;
+        // seria bueno hacer una funcion que nos haga la tarea de pedirle al usuario una de las opciones y que haga todas las validaciones con control de excepciones
+        if (!(std::cin >> op)) {
+            std::cin.clear();
+            std::cin.ignore(1024, '\n');
+            std::cout << "[WARN] Entrada inválida.\n";
+            continue;
+        }
+        std::cin.ignore(1024, '\n'); // limpia resto de línea
+
+        if (op == 1) {
+            bool ok = crear_usuario_admin(userCed, userPass, userSaldo,
+                                          nUsers, maxUsers,
+                                          usuariosFile, metodo, semilla);
+            if (ok) {
+                std::cout << "[OK] Usuario creado. Total usuarios: " << *nUsers << "\n";
+            } else {
+                std::cout << "[FAIL] No se pudo crear el usuario.\n";
+            }
+        } else if (op == 2) {
+            std::cout << "Saliendo del menú admin...\n";
+            return true;
+        } else {
+            std::cout << "[WARN] Opción no válida.\n";
+        }
+    }
+}
+
+int construirLineaUsuario(char* out, int outCap,
+                          const char* ced, const char* pass, long saldo)
+{
+    if (!out || outCap <= 0 || !ced || !pass || saldo < 0) return -1;
+
+    // Longitudes y validación básica (sin comas/ saltos)
+    int lenCed = 0;
+    while (ced[lenCed] != '\0') {
+        if (ced[lenCed] == ',' || ced[lenCed] == '\n' || ced[lenCed] == '\r') return -1;
+        ++lenCed;
+    }
+    int lenPass = 0;
+    while (pass[lenPass] != '\0') {
+        if (pass[lenPass] == ',' || pass[lenPass] == '\n' || pass[lenPass] == '\r') return -1;
+        ++lenPass;
+    }
+
+    // Convertir saldo (>=0) a ASCII sin usar sprintf
+    char saldoBuf[32];
+    int  saldoLen = 0;
+    if (saldo == 0) {
+        saldoBuf[0] = '0';
+        saldoLen = 1;
+    } else {
+        unsigned long u = (unsigned long)saldo;
+        char tmp[32];
+        int  t = 0;
+        while (u > 0 && t < 31) {
+            tmp[t++] = (char)('0' + (u % 10));
+            u /= 10;
+        }
+        // invertir
+        for (int i = 0; i < t; ++i) saldoBuf[i] = tmp[t - 1 - i];
+        saldoLen = t;
+    }
+
+    // total: ced + ',' + pass + ',' + saldo + '\0'
+    int total = lenCed + 1 + lenPass + 1 + saldoLen;
+    if (total + 1 > outCap) return -1;
+
+    // Construir: "ced,pass,saldo" (sin '\n' final)
+    int pos = 0;
+    for (int i = 0; i < lenCed;  ++i) out[pos++] = ced[i];
+    out[pos++] = ',';
+    for (int i = 0; i < lenPass; ++i) out[pos++] = pass[i];
+    out[pos++] = ',';
+    for (int i = 0; i < saldoLen; ++i) out[pos++] = saldoBuf[i];
+
+    out[pos] = '\0';
+    return pos; // bytes escritos (sin contar el '\0')
+}
+
+bool agregarUsuarioRAM(const char* ced, const char* pass, long saldo,
+                       char userCed[][CED_BUF], char userPass[][PASS_BUF], long* userSaldo,
+                       int* nUsers, int maxUsers)
+{
+    if (!ced || !pass || !userCed || !userPass || !userSaldo || !nUsers) return false;
+    if (maxUsers <= 0 || *nUsers < 0 || *nUsers >= maxUsers) return false;
+    if (saldo < 0) return false;
+
+    // Verificar que quepan en los buffers (incluyendo '\0')
+    int lenCed = 0;
+    while (ced[lenCed] != '\0') {
+        if (lenCed >= CED_BUF - 1) return false;
+        ++lenCed;
+    }
+    int lenPass = 0;
+    while (pass[lenPass] != '\0') {
+        if (lenPass >= PASS_BUF - 1) return false;
+        ++lenPass;
+    }
+
+    // Copiar a la posición libre
+    int idx = *nUsers;
+
+    for (int i = 0; i < lenCed; ++i) userCed[idx][i] = ced[i];
+    userCed[idx][lenCed] = '\0';
+
+    for (int i = 0; i < lenPass; ++i) userPass[idx][i] = pass[i];
+    userPass[idx][lenPass] = '\0';
+
+    userSaldo[idx] = saldo;
+
+    (*nUsers)++;
+    return true;
+}
+
+// ====== Crear usuario (invocada desde el menú) ======
+bool crear_usuario_admin(char userCed[][CED_BUF], char userPass[][PASS_BUF], long* userSaldo,
+                         int* nUsers, int maxUsers,
+                         const char* usuariosFile,
+                         int metodo, int semilla)
+{
+    if (!userCed || !userPass || !userSaldo || !nUsers || !usuariosFile ||
+        maxUsers <= 0 || semilla <= 0 || (metodo != 1 && metodo != 2)) {
+        std::cout << "[ERR] Parámetros inválidos en crear_usuario_admin.\n";
+        return false;
+    }
+
+    if (*nUsers >= maxUsers) {
+        std::cout << "[ERR] Capacidad de usuarios llena (" << maxUsers << ").\n";
+        return false;
+    }
+
+    // 1) Leer entradas “blindadas”
+    char cedTmp[CED_BUF];
+    char passTmp[PASS_BUF];
+    long saldoTmp = 0;
+
+    if (!leer_cedula(cedTmp)) {
+        std::cout << "[ERR] Cédula inválida.\n";
+        return false;
+    }
+    if (!leer_pass(passTmp)) {
+        std::cout << "[ERR] Clave inválida.\n";
+        return false;
+    }
+    if (!leer_long_pos("Saldo inicial (>=0): ", saldoTmp)) {
+        std::cout << "[ERR] Saldo inicial inválido.\n";
+        return false;
+    }
+
+    // 2) Unicidad
+    if (idxUserByCed(cedTmp, userCed, *nUsers) >= 0) {
+        std::cout << "[ERR] Ya existe un usuario con esa cédula.\n";
+        return false;
+    }
+
+    // 3) Construir línea CSV (sin salto final)
+    char linea[256];
+    int wrote = construirLineaUsuario(linea, (int)sizeof(linea), cedTmp, passTmp, saldoTmp);
+    if (wrote < 0) {
+        std::cout << "[ERR] No se pudo construir la línea CSV (buffer insuficiente).\n";
+        return false;
+    }
+
+    // 4) Persistir primero (append codificado)
+    if (!appendLineaCodificada(usuariosFile, metodo, semilla, linea)) {
+        std::cout << "[ERR] Falló append codificado al archivo de usuarios.\n";
+        return false;
+    }
+
+    // 5) Actualizar RAM
+    if (!agregarUsuarioRAM(cedTmp, passTmp, saldoTmp, userCed, userPass, userSaldo, nUsers, maxUsers)) {
+        std::cout << "[ERR] No se pudo agregar en RAM (capacidad?).\n";
+        return false;
+    }
+
+    // Podriamos poner aca: 1) recargar desde archivos la ram si el actualizar ram y melo, o pasar un trown despues que nos indique que debemos reiniciar la ram porque no se pudo actualizar de manera correcta
+
+    return true;
+}
+
+// ===== Menú de usuario (no admin) =====
+bool menu_usuario(const char* cedulaUsuario,
+                  char userCed[][CED_BUF], char userPass[][PASS_BUF], long* userSaldo,
+                  int nUsers,
+                  const char* usuariosFile, const char* txFile,
+                  int metodo, int semilla, long tarifaIngresoCOP)
+{
+    // Validación básica de parámetros
+    if (!cedulaUsuario || !userCed || !userPass || !userSaldo ||
+        !usuariosFile || !txFile ||
+        nUsers <= 0 || semilla <= 0 || (metodo != 1 && metodo != 2) ||
+        tarifaIngresoCOP < 0) {
+        std::cout << "[ERR] Parametros invalidos en menu_usuario.\n";
+        return false;
+    }
+
+    // Resolver índice del usuario en RAM
+    int idx = idxUserByCed(cedulaUsuario, userCed, nUsers);
+    if (idx < 0) {
+        std::cout << "[ERR] Usuario no encontrado en RAM.\n";
+        return false;
+    }
+
+    // Cobro de tarifa de ingreso (una sola vez por sesión)
+    if (tarifaIngresoCOP > 0) {
+        if (userSaldo[idx] < tarifaIngresoCOP) {
+            std::cout << "[DENEGADO] Saldo insuficiente para cubrir la tarifa de ingreso ("
+                      << tarifaIngresoCOP << ").\n";
+            return false;
+        }
+
+        long saldoAntes   = userSaldo[idx];
+        long saldoDespues = saldoAntes - tarifaIngresoCOP;
+        userSaldo[idx]    = saldoDespues;
+
+        long id = cargarNextIdTx(txFile, metodo, semilla);
+        if (id < 1) {
+            // revertir RAM
+            userSaldo[idx] = saldoAntes;
+            std::cout << "[ERR] No se pudo obtener nextId de transaccion.\n";
+            return false;
+        }
+
+        // Registrar TX_FEE
+        if (!registrarTx(txFile, metodo, semilla,
+                         id, cedulaUsuario, TX_FEE,
+                         /*costo*/tarifaIngresoCOP, /*monto*/0,
+                         saldoAntes, saldoDespues)) {
+            // revertir RAM
+            userSaldo[idx] = saldoAntes;
+            std::cout << "[ERR] No se pudo registrar TX_FEE.\n";
+            return false;
+        }
+
+        // Persistir usuarios (reescribir CSV codificado)
+        if (!reescribirUsuariosDesdeRAM(usuariosFile, metodo, semilla,
+                                        userCed, userPass, userSaldo, nUsers)) {
+            // revertir RAM y (opcional) registrar una reversión
+            userSaldo[idx] = saldoAntes;
+            std::cout << "[ERR] No se pudo persistir usuarios tras cobrar tarifa.\n";
+            return false;
+        }
+    }
+
+    // Bucle del menú
+    for (;;) {
+        std::cout << "\n=== MENU USUARIO (" << cedulaUsuario << ") ===\n";
+        std::cout << "1) Consultar saldo\n";
+        std::cout << "2) Retirar dinero\n";
+        std::cout << "3) Salir\n";
+        std::cout << "Opcion: ";
+
+        int op = 0;
+        if (!(std::cin >> op)) {
+            std::cin.clear();
+            std::cin.ignore(1024, '\n');
+            std::cout << "[WARN] Entrada invalida.\n";
+            continue;
+        }
+        std::cin.ignore(1024, '\n'); // limpiar resto de linea
+
+        if (op == 1) {
+            // CONSULTA: solo mostrar saldo (si deseas, puedes registrar TX_CONSULTA con costo=0)
+            std::cout << "Saldo actual: " << userSaldo[idx] << " COP\n";
+            // (Opcional) Registrar consulta:
+            // long id = cargarNextIdTx(txFile, metodo, semilla);
+            // if (id >= 1) registrarTx(txFile, metodo, semilla, id, cedulaUsuario, TX_CONSULTA, 0, 0, userSaldo[idx], userSaldo[idx]);
+
+        } else if (op == 2) {
+            long monto = 0;
+            if (!leer_long_pos("Monto a retirar (>=1): ", monto)) {
+                std::cout << "[WARN] Monto invalido.\n";
+                continue;
+            }
+            if (monto < 1) {
+                std::cout << "[WARN] Monto debe ser >= 1.\n";
+                continue;
+            }
+            if (monto > userSaldo[idx]) {
+                std::cout << "[WARN] Saldo insuficiente.\n";
+                continue;
+            }
+
+            long saldoAntes   = userSaldo[idx];
+            long saldoDespues = saldoAntes - monto;
+            userSaldo[idx]    = saldoDespues;
+
+            long id = cargarNextIdTx(txFile, metodo, semilla);
+            if (id < 1) {
+                userSaldo[idx] = saldoAntes; // revertir
+                std::cout << "[ERR] No se pudo obtener nextId de transaccion.\n";
+                continue;
+            }
+
+            if (!registrarTx(txFile, metodo, semilla,
+                             id, cedulaUsuario, TX_RETIRO,
+                             /*costo*/0, monto,
+                             saldoAntes, saldoDespues)) {
+                userSaldo[idx] = saldoAntes; // revertir
+                std::cout << "[ERR] No se pudo registrar TX_RETIRO.\n";
+                continue;
+            }
+
+            if (!reescribirUsuariosDesdeRAM(usuariosFile, metodo, semilla,
+                                            userCed, userPass, userSaldo, nUsers)) {
+                userSaldo[idx] = saldoAntes; // revertir
+                std::cout << "[ERR] No se pudo persistir usuarios tras retiro.\n";
+                continue;
+            }
+
+            std::cout << "[OK] Retiro exitoso. Nuevo saldo: " << userSaldo[idx] << " COP\n";
+
+        } else if (op == 3) {
+            std::cout << "Saliendo del menu de usuario...\n";
+            return true;
+        } else {
+            std::cout << "[WARN] Opcion no valida.\n";
+        }
+    }
+}
+
+int construirLineaTx(char* out, int outCap,
+                     long id, const char* ced, const char* tipo,
+                     long costo, long monto, long saldoAntes, long saldoDespues)
+{
+    if (!out || outCap <= 0 || !ced || !tipo) return -1;
+    if (id < 0 || costo < 0 || monto < 0 || saldoAntes < 0 || saldoDespues < 0) return -1;
+    if (fm_contains_forbidden(ced) || fm_contains_forbidden(tipo)) return -1;
+
+    // Formato (sin '\n' final): id,ced,tipo,costo,monto,saldoAntes,saldoDespues
+    int pos = 0;
+    if (!fm_append_uint(out, outCap, &pos, (unsigned long)id))             return -1;
+    if (!fm_append_char(out, outCap, &pos, ','))                           return -1;
+    if (!fm_append_str(out, outCap, &pos, ced))                            return -1;
+    if (!fm_append_char(out, outCap, &pos, ','))                           return -1;
+    if (!fm_append_str(out, outCap, &pos, tipo))                           return -1;
+    if (!fm_append_char(out, outCap, &pos, ','))                           return -1;
+    if (!fm_append_uint(out, outCap, &pos, (unsigned long)costo))          return -1;
+    if (!fm_append_char(out, outCap, &pos, ','))                           return -1;
+    if (!fm_append_uint(out, outCap, &pos, (unsigned long)monto))          return -1;
+    if (!fm_append_char(out, outCap, &pos, ','))                           return -1;
+    if (!fm_append_uint(out, outCap, &pos, (unsigned long)saldoAntes))     return -1;
+    if (!fm_append_char(out, outCap, &pos, ','))                           return -1;
+    if (!fm_append_uint(out, outCap, &pos, (unsigned long)saldoDespues))   return -1;
+
+    if (pos >= outCap) return -1;
+    out[pos] = '\0';
+    return pos; // bytes útiles (sin contar el '\0')
+}
+
+
+bool registrarTx(const char* txFile, int metodo, int semilla,
+                 long id, const char* ced, const char* tipo,
+                 long costo, long monto, long saldoAntes, long saldoDespues)
+{
+    if (!txFile || !ced || !tipo) return false;
+    if (semilla <= 0 || (metodo != 1 && metodo != 2)) return false;
+    if (id < 1 || costo < 0 || monto < 0 || saldoAntes < 0 || saldoDespues < 0) return false;
+
+    char linea[256];
+    int wrote = construirLineaTx(linea, (int)sizeof(linea),
+                                 id, ced, tipo, costo, monto, saldoAntes, saldoDespues);
+    if (wrote < 0) return false;
+
+    return appendLineaCodificada(txFile, metodo, semilla, linea);
+}
+
+bool reescribirUsuariosDesdeRAM(const char* usuariosFile, int metodo, int semilla,
+                                char ced[][CED_BUF], char pass[][PASS_BUF], const long* saldo,
+                                int nUsers)
+{
+    if (!usuariosFile || !ced || !pass || !saldo) return false;
+    if (nUsers < 0 || semilla <= 0 || (metodo != 1 && metodo != 2)) return false;
+
+    // Encabezado fijo (sin '\n' al final si no hay usuarios)
+    const char* header = "cedula,clave,saldo";
+
+    // Capacidad: encabezado + posible '\n' + nUsers * (máx 256 por línea)
+    int headerLen = 0; while (header[headerLen] != '\0') ++headerLen;
+    int cap = headerLen + (nUsers > 0 ? 1 : 0) + nUsers * 256;
+    if (cap <= 0) cap = 1;
+
+    unsigned char* plano = new unsigned char[cap];
+    if (!plano) return false;
+
+    int pos = 0;
+
+    // Copiar encabezado
+    for (int i = 0; i < headerLen; ++i) plano[pos++] = (unsigned char)header[i];
+
+    // Si hay usuarios, ponemos salto de línea después del encabezado
+    if (nUsers > 0) {
+        plano[pos++] = (unsigned char)'\n';
+    }
+
+    // Escribir cada usuario en una línea (sin salto al final del archivo)
+    for (int i = 0; i < nUsers; ++i) {
+        char linea[256];
+        int wrote = construirLineaUsuario(linea, (int)sizeof(linea),
+                                          ced[i], pass[i], saldo[i]);
+        if (wrote < 0) { delete[] plano; return false; }
+
+        // Copiar la línea al buffer plano
+        for (int k = 0; k < wrote; ++k) {
+            if (pos >= cap) { delete[] plano; return false; } // seguridad
+            plano[pos++] = (unsigned char)linea[k];
+        }
+
+        // Agregar '\n' SOLO si no es la última línea
+        if (i < nUsers - 1) {
+            if (pos >= cap) { delete[] plano; return false; }
+            plano[pos++] = (unsigned char)'\n';
+        }
+    }
+
+    // Persistir codificado (no se escribe '\0')
+    bool ok = escribirPlanoCodificado(usuariosFile, metodo, semilla, plano, pos);
+
+    delete[] plano;
+    return ok;
+}
+
