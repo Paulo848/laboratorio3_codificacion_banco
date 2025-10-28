@@ -68,6 +68,8 @@ bool leer_long_pos(const char* prompt, long& out);
 //menus
 // ==================
 
+bool leer_opcion_0_9(int& out);
+
 bool menu_admin(const char* cedula,
                 char userCed[][CED_BUF], char userPass[][PASS_BUF], long* userSaldo,
                 int* nUsers, int maxUsers,

@@ -11,7 +11,7 @@ unsigned char* de_metodo_1 ( int semilla, const unsigned char* input_, std::size
     int* comodin = nullptr;
     if( sobrante ) comodin = new int [sobrante]();
 
-    std::size_t limite = totalBits-sobrante;
+    std::size_t limite = totalBits - sobrante;
 
     std::size_t nBloques  = limite / n;
 
